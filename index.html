@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>進階變星模擬：愛丁頓熱機與光變曲線</title>
+
+    <!-- React and ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            background-color: #020617;
+            color: #e2e8f0;
+            font-family: 'Noto Sans TC', sans-serif;
+            overflow: hidden;
+            /* 防止捲動，強制單一視窗 */
+        }
+
+        .slider-thumb::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #f59e0b;
+            cursor: pointer;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+        }
+
+        /* 自定義滾動條樣式 (如果圖表區需要) */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const PlayIcon = () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>;
+        const PauseIcon = () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>;
+
+        const App = () => {
+            const [phase, setPhase] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(2);
+
+            // --- 物理核心引擎 ---
+            // 雙週期版本 (0 - 720度)
+            const calculatePhysics = (deg) => {
+                const rad = deg * (Math.PI / 180);
+                const cycleDeg = deg % 360;
+
+                // 1. 體積/半徑變化 (Volume V)
+                const V_mean = 100;
+                const V_amp = 30;
+                const volume = V_mean - V_amp * Math.cos(rad);
+                const radius = Math.pow(volume, 1 / 3) * 25; // 視覺半徑
+
+                // 2. 理想氣體壓力 (Adiabatic Base)
+                const P_adiabatic = 100000 / Math.pow(volume, 1.66);
+
+                // 3. 愛丁頓閥效應 (Non-adiabatic Term)
+                let distFromMin = Math.min(Math.abs(cycleDeg - 0), Math.abs(cycleDeg - 360));
+                const opacity = 0.3 + 0.7 * Math.exp(-Math.pow(distFromMin / 60, 2));
+
+                const heat_surge = 80 * opacity;
+
+                let pressure = P_adiabatic + (Math.sin(rad) > -0.2 ? heat_surge : 0) + (Math.sin(rad) * 20);
+
+                // 4. 溫度與光度
+                const temp = (pressure * volume) / 80;
+                const luminosity = Math.pow(radius / 50, 2) * Math.pow(temp / 100, 4);
+
+                return { radius, volume, pressure, opacity, temp, luminosity };
+            };
+
+            const cycleData = useMemo(() => {
+                const data = [];
+                for (let i = 0; i <= 720; i += 2) {
+                    data.push({ deg: i, ...calculatePhysics(i) });
+                }
+                return data;
+            }, []);
+
+            const current = calculatePhysics(phase);
+
+            useEffect(() => {
+                let interval;
+                if (isPlaying) {
+                    interval = setInterval(() => {
+                        setPhase(p => (p + speed) % 720);
+                    }, 30);
+                }
+                return () => clearInterval(interval);
+            }, [isPlaying, speed]);
+
+            const getStarColor = (t) => {
+                const minT = Math.min(...cycleData.map(d => d.temp));
+                const maxT = Math.max(...cycleData.map(d => d.temp));
+                const ratio = (t - minT) / (maxT - minT);
+
+                const r = Math.floor(239 + (191 - 239) * ratio);
+                const g = Math.floor(68 + (219 - 68) * ratio);
+                const b = Math.floor(68 + (254 - 68) * ratio);
+
+                return `rgb(${r}, ${g}, ${b})`;
+            };
+
+            const width = 300;
+            const height = 150; // Slightly reduced height for compactness
+            const padding = 25;
+
+            const getStatus = (deg) => {
+                const d = deg % 360;
+                if (d >= 340 || d < 20) return "吸熱 (閥門關)";
+                if (d >= 20 && d < 160) return "膨脹做功";
+                if (d >= 160 && d < 200) return "放熱 (閥門開)";
+                return "壓縮復原";
+            };
+
+            return (
+                <div className="h-screen flex flex-col bg-[#020617]">
+
+                    {/* 主要內容區 (自適應高度) */}
+                    <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+
+                        {/* 左側：恆星視覺化 (佔 40%) */}
+                        <div className="lg:w-5/12 relative border-b lg:border-b-0 lg:border-r border-gray-800 bg-gray-900/30 flex flex-col">
+
+                            {/* 儀表板數據 (絕對定位) */}
+                            <div className="absolute top-4 left-4 z-10 bg-black/40 backdrop-blur rounded p-3 text-xs font-mono space-y-2 border border-white/10 shadow-lg">
+                                <div className="flex justify-between w-32 items-center">
+                                    <span className="text-gray-400">Radius</span>
+                                    <span className="text-orange-300 font-bold">{current.radius.toFixed(1)} R⊙</span>
+                                </div>
+                                <div className="flex justify-between w-32 items-center">
+                                    <span className="text-gray-400">Temp</span>
+                                    <span className="text-blue-300 font-bold">{Math.round(current.temp)} K</span>
+                                </div>
+                                <div className="flex justify-between w-32 items-center">
+                                    <span className="text-gray-400">Opacity</span>
+                                    <span className="text-purple-300 font-bold">{current.opacity.toFixed(2)} κ</span>
+                                </div>
+                            </div>
+
+                            {/* 星體渲染區 */}
+                            <div className="flex-1 flex items-center justify-center relative overflow-hidden">
+                                <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(white 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
+                                <div
+                                    className="relative rounded-full transition-all duration-75 shadow-[0_0_50px_rgba(255,100,0,0.2)]"
+                                    style={{
+                                        width: current.radius * 3, // Slightly larger for impact
+                                        height: current.radius * 3,
+                                        backgroundColor: getStarColor(current.temp),
+                                        boxShadow: `0 0 ${current.opacity * 60}px ${getStarColor(current.temp)}`
+                                    }}
+                                >
+                                    <div
+                                        className="absolute inset-0 rounded-full transition-colors duration-100"
+                                        style={{
+                                            background: `radial-gradient(circle, rgba(0,0,0,0) 20%, rgba(0,0,0,${current.opacity * 0.8}) 90%)`
+                                        }}
+                                    ></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 右側：圖表區 (佔 60%) */}
+                        <div className="lg:w-7/12 p-4 overflow-y-auto lg:overflow-hidden grid grid-rows-2 gap-4">
+
+                            {/* 上半部：PV 圖 */}
+                            <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 p-3 relative flex flex-col">
+                                <div className="flex justify-between items-start mb-1">
+                                    <h3 className="text-sky-400 font-bold text-sm flex items-center gap-2">
+                                        <span className="w-1.5 h-4 bg-sky-500 rounded-sm"></span>
+                                        PV Diagram (壓力-體積)
+                                    </h3>
+                                    <div className="text-[10px] text-gray-400 bg-gray-900/50 px-2 py-1 rounded">
+                                        順時針 = 做功
+                                    </div>
+                                </div>
+                                <div className="flex-1 w-full min-h-0">
+                                    <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="overflow-visible">
+                                        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#334155" />
+                                        <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#334155" />
+
+                                        <path
+                                            d={(() => {
+                                                const maxV = Math.max(...cycleData.map(d => d.volume));
+                                                const minV = Math.min(...cycleData.map(d => d.volume));
+                                                const maxP = Math.max(...cycleData.map(d => d.pressure));
+                                                const minP = Math.min(...cycleData.map(d => d.pressure));
+                                                const singleCycleData = cycleData.filter(d => d.deg <= 360);
+                                                const points = singleCycleData.map(d => {
+                                                    const x = padding + ((d.volume - minV) / (maxV - minV)) * (width - 2 * padding);
+                                                    const y = (height - padding) - ((d.pressure - minP) / (maxP - minP)) * (height - 2 * padding);
+                                                    return `${x},${y}`;
+                                                });
+                                                return `M ${points.join(' L ')} Z`;
+                                            })()}
+                                            fill="rgba(14, 165, 233, 0.1)"
+                                            stroke="#0ea5e9"
+                                            strokeWidth="2"
+                                        />
+                                        {/* Dot */}
+                                        {(() => {
+                                            const maxV = Math.max(...cycleData.map(d => d.volume));
+                                            const minV = Math.min(...cycleData.map(d => d.volume));
+                                            const maxP = Math.max(...cycleData.map(d => d.pressure));
+                                            const minP = Math.min(...cycleData.map(d => d.pressure));
+                                            const x = padding + ((current.volume - minV) / (maxV - minV)) * (width - 2 * padding);
+                                            const y = (height - padding) - ((current.pressure - minP) / (maxP - minP)) * (height - 2 * padding);
+                                            return <circle cx={x} cy={y} r="5" fill="#f59e0b" stroke="white" strokeWidth="2" />
+                                        })()}
+                                        <text x={width - padding} y={height - 5} fill="#64748b" fontSize="10" textAnchor="end">Volume</text>
+                                        <text x={10} y={padding} fill="#64748b" fontSize="10" transform={`rotate(-90, 10, ${padding})`} textAnchor="end">Pressure</text>
+                                    </svg>
+                                </div>
+                            </div>
+
+                            {/* 下半部：並排顯示 光變 與 不透明度 */}
+                            <div className="grid grid-cols-2 gap-4 h-full min-h-0">
+                                {/* 光變曲線 */}
+                                <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 p-3 flex flex-col">
+                                    <h3 className="text-yellow-400 font-bold text-sm mb-1 flex items-center gap-2">
+                                        <span className="w-1.5 h-4 bg-yellow-400 rounded-sm"></span>
+                                        Luminosity
+                                    </h3>
+                                    <div className="flex-1 w-full min-h-0">
+                                        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="overflow-visible">
+                                            <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#334155" />
+                                            <path
+                                                d={(() => {
+                                                    const maxL = Math.max(...cycleData.map(d => d.luminosity));
+                                                    const minL = Math.min(...cycleData.map(d => d.luminosity));
+                                                    const points = cycleData.map(d => {
+                                                        const x = padding + (d.deg / 720) * (width - 2 * padding);
+                                                        const y = (height - padding) - ((d.luminosity - minL) / (maxL - minL)) * (height - 2 * padding);
+                                                        return `${x},${y}`;
+                                                    });
+                                                    return `M ${points.join(' L ')}`;
+                                                })()}
+                                                fill="none"
+                                                stroke="#fbbf24"
+                                                strokeWidth="2"
+                                            />
+                                            <line x1={padding + (phase / 720) * (width - 2 * padding)} y1={padding} x2={padding + (phase / 720) * (width - 2 * padding)} y2={height - padding} stroke="white" strokeDasharray="4" opacity="0.5" />
+                                        </svg>
+                                    </div>
+                                </div>
+
+                                {/* 不透明度曲線 */}
+                                <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 p-3 flex flex-col">
+                                    <h3 className="text-purple-400 font-bold text-sm mb-1 flex items-center gap-2">
+                                        <span className="w-1.5 h-4 bg-purple-400 rounded-sm"></span>
+                                        Opacity (κ)
+                                    </h3>
+                                    <div className="flex-1 w-full min-h-0">
+                                        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="overflow-visible">
+                                            <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#334155" />
+                                            <path
+                                                d={(() => {
+                                                    const maxO = Math.max(...cycleData.map(d => d.opacity));
+                                                    const minO = Math.min(...cycleData.map(d => d.opacity));
+                                                    const points = cycleData.map(d => {
+                                                        const x = padding + (d.deg / 720) * (width - 2 * padding);
+                                                        const y = (height - padding) - ((d.opacity - minO) / (maxO - minO)) * (height - 2 * padding);
+                                                        return `${x},${y}`;
+                                                    });
+                                                    return `M ${points.join(' L ')}`;
+                                                })()}
+                                                fill="none"
+                                                stroke="#c084fc"
+                                                strokeWidth="2"
+                                            />
+                                            <line x1={padding + (phase / 720) * (width - 2 * padding)} y1={padding} x2={padding + (phase / 720) * (width - 2 * padding)} y2={height - padding} stroke="white" strokeDasharray="4" opacity="0.5" />
+                                        </svg>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 底部控制列 (固定高度) */}
+                    <div className="bg-gray-800 border-t border-gray-700 p-4 flex flex-col md:flex-row items-center gap-6 shadow-2xl z-20">
+                        {/* 播放控制 */}
+                        <button
+                            onClick={() => setIsPlaying(!isPlaying)}
+                            className={`flex items-center justify-center gap-2 w-14 h-14 md:w-12 md:h-12 rounded-full font-bold transition flex-shrink-0 ${isPlaying ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white shadow-lg`}
+                        >
+                            {isPlaying ? <PauseIcon size={20} /> : <PlayIcon size={20} className="ml-1" />}
+                        </button>
+
+                        {/* 進度條與資訊 */}
+                        <div className="flex-1 w-full flex flex-col gap-2">
+                            <div className="flex justify-between items-end text-sm text-gray-400 font-mono">
+                                <span>Phase: <span className="text-white">{phase}°</span></span>
+                                <span>Cycle: <span className="text-white">{(Math.floor(phase / 360) + 1)}</span> / 2</span>
+                            </div>
+                            <input
+                                type="range" min="0" max="720" value={phase}
+                                onChange={(e) => { setPhase(parseInt(e.target.value)); setIsPlaying(false); }}
+                                className="w-full h-3 bg-gray-700 rounded-full appearance-none cursor-pointer slider-thumb"
+                            />
+                        </div>
+
+                        {/* 狀態顯示 */}
+                        <div className="bg-gray-900/80 px-6 py-2 rounded-lg border-l-4 border-amber-500 w-full md:w-64 flex-shrink-0">
+                            <span className="text-amber-500 font-bold text-xs uppercase tracking-wider block">物理狀態</span>
+                            <p className="text-lg font-bold text-white whitespace-nowrap">{getStatus(phase)}</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
